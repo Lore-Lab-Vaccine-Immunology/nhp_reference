@@ -4,18 +4,27 @@
 .RData
 .Ruserdata
 
-# Ignore entire directories but allow specific subdirectories
+# Data directories - only include what's used in the code
 data/*
-!data/Cynos/
 !data/fold_changes/
-!data/gene_modules/
-!data/Indian_Rhesus/
 !data/nf-core_rnaseq/
 
+# Documentation
 doc/
 
+# Results - only keep lab book
 results/*
 !results/lab_book/
 
+# Renv
 renv/
 
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+*.swp
+*.swo
+*~
+*.bak
