@@ -1,0 +1,14 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+data/
+doc/
+results/
+!results/lab_book
+!data/Cynos
+!data/fold_changes
+!data/gene_modules
+!data/Indian_Rhesus
+!data/nf-core_rnaseq
+renv/
