@@ -7,7 +7,12 @@
 # Data directories - only include what's used in the code
 data/*
 !data/fold_changes/
-!data/nf-core_rnaseq/
+!data/nf-core_rnaseq/CD40_project/pipeline_info
+!data/nf-core_rnaseq/CD40_project/star_salmon
+!data/nf-core_rnaseq/novavax/star_salmon
+!data/nf-core_rnaseq/novavax/pipeline_info
+!data/merged_metadata.csv
+!data/metadata_edited.csv
 
 # Documentation
 doc/
