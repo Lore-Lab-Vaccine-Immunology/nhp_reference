@@ -2,7 +2,14 @@
 title: "NHP Reference Values project - RNA-seq analysis"
 author: "Rodrigo Arcoverde Cerveira"
 date: '`r format(Sys.Date(), "%Y-%m-%d")`'
-output: html_document
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 2
+    number_sections: true
+    theme: cosmo
+    code_folding: hide
 knit: (function(inputFile, encoding) {
           rmarkdown::render(inputFile,
                             encoding = encoding, 

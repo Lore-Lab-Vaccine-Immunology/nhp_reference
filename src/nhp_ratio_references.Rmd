@@ -2,15 +2,20 @@
 title: "NHP ratio reference values calculation"
 author: "Rodrigo Arcoverde Cerveira & Xianglei Yan"
 date: '`r format(Sys.Date(), "%Y-%m-%d")`'
-output: html_document
+output: 
+ html_document:
+    toc: true
+    depth: 2
+    toc_float: true
+    number_sections: true
+ github_document:
+    preview_html: false
 knit: (function(inputFile, encoding) {
           rmarkdown::render(inputFile,
                             encoding = encoding, 
-                            output_file = paste0(
-                              xfun::sans_ext(inputFile), '_', Sys.Date(), '.html'),
+                            output_file = paste0(Sys.Date(), "_",
+                              xfun::sans_ext(inputFile), ".html"),
                                 output_dir = "../results/lab_book/")})
-editor_options: 
-  chunk_output_type: inline
 ---
 
 
