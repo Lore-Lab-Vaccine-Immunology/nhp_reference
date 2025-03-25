@@ -35,8 +35,8 @@ This repository contains all the code used for:
 - Statistical analysis and visualization of results
 
 If you want to check the code and plots without rerunning the analysis, see our rendered results:
-- [Blood cell ratio analysis](link_to_rendered_ratio_analysis)
-- [RNA-seq analysis](link_to_rendered_rnaseq_analysis)
+- [Blood cell ratio analysis](https://lore-lab-vaccine-immunology.github.io/nhp_reference/results/lab_book/nhp_ratio_references_2025-03-25.html)
+- [RNA-seq analysis](https://lore-lab-vaccine-immunology.github.io/nhp_reference/results/lab_book/rna-seq_analysis_2025-03-25.html)
 
 ## Preprocessing dataset
 
@@ -69,7 +69,7 @@ To rerun the analysis and generate plots, you need:
 Reproduction steps:
 ```bash
 # Clone this repository
-git clone https://github.com/yourusername/nhp_reference_project
+git clone https://github.com/Lore-Lab-Vaccine-Immunology/nhp_reference_project
 
 # Install required R packages
 Rscript -e "renv::restore()"
@@ -77,6 +77,7 @@ Rscript -e "renv::restore()"
 # Run the analyses (from within RStudio)
 # Open nhp_ratio_references.Rmd and knit
 # Open rna-seq_analysis.Rmd and knit
+```
 
 ## Plots and rendered results
 
