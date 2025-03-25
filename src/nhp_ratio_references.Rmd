@@ -1,0 +1,151 @@
+---
+title: "NHP ratio reference values calculation"
+author: "Rodrigo Arcoverde Cerveira & Xianglei Yan"
+date: '`r format(Sys.Date(), "%Y-%m-%d")`'
+output: html_document
+knit: (function(inputFile, encoding) {
+          rmarkdown::render(inputFile,
+                            encoding = encoding, 
+                            output_file = paste0(
+                              xfun::sans_ext(inputFile), '_', Sys.Date(), '.html'),
+                                output_dir = "../results/lab_book/")})
+editor_options: 
+  chunk_output_type: inline
+---
+
+
+```{r, global.options, include=FALSE}
+# Global knitr settings 
+# Set up figures and chunks messages
+
+knitr::opts_knit$set(
+  echo = TRUE,
+  root.dir = getwd(),
+  fig.width = 6, fig.height = 5,
+  fig.align = "center",
+  out.width = 768,
+  fig.pos = "H",
+  warning = FALSE,
+  message = FALSE
+)
+knitr::opts_chunk$set(
+  warning = FALSE,
+  message = FALSE,
+  fig.width = 6, fig.height = 5,
+  fig.align = "center",
+  out.width = 768,
+  fig.pos = "H"
+)
+
+data.dir <- "../data"
+result.dir <- paste("results/", Sys.Date(), sep = "/") 
+figure.dir <- paste0("../", result.dir, "/figures") 
+
+# Create result.dir with date in if not existent
+ifelse(isFALSE(dir.exists(paste0("../", result.dir))),
+  dir.create(paste0("../", result.dir), recursive = TRUE),
+  "Result directory for today exists already!"
+)
+
+ifelse(isFALSE(dir.exists(paste0(figure.dir))),
+  dir.create(paste0(figure.dir), recursive = TRUE),
+  "Result directory for today exists already!"
+)
+
+options(stringsAsFactors = FALSE)
+
+
+```
+
+# Load libraries
+```{r, include=FALSE, results='hide'}
+# Load libraries
+library(data.table)
+library(dplyr)
+library(readxl)
+library(tidyr)
+library(ggplot2)
+library(ggprism)
+```
+
+# Load data
+
+```{r load_data}
+# load all excel files within data folder with "xlsx" file extension
+ls_excel <- list.files(data.dir, recursive = TRUE, all.files = TRUE, full.names = TRUE, pattern = "xlsx")[-11]
+names(ls_excel) <- list.files(data.dir[-11], recursive = TRUE, all.files = TRUE, pattern = "xlsx")[-11]
+ls_excel <- lapply(ls_excel, read_xlsx)
+
+# merge all files in a single data.table and format column names
+ls_excel <- rbindlist(ls_excel) %>% 
+  select(-c(...13,...14)) %>%
+  rename("standard_10^9/L" = "10^9/L")
+```
+
+# Editing to a wider data.table
+
+```{r data_wrangling}
+clean_dataset <- ls_excel %>%
+  pivot_wider(names_from = c("measurement_name"), 
+              values_from = c("standard_10^9/L", "measurement_value")) %>%
+  drop_na(any_of(names(.)[contains("measurement_value")]))
+
+```
+
+## Calculating ratios
+
+This section calculates four important blood cell ratios used in hematology:
+ 1. NLR (Neutrophil-to-Lymphocyte Ratio) - inflammation marker
+ 2. MLR (Monocyte-to-Lymphocyte Ratio) - immune system indicator
+ 3. PLR (Platelet-to-Lymphocyte Ratio) - inflammation and thrombosis marker
+ 4. NMR (Neutrophil-to-Monocyte Ratio) - immune response indicator
+
+The calculated ratios are added as new columns to the dataset.
+
+```{r ratio_calc}
+
+clean_dataset <- clean_dataset %>%
+  mutate(NLR = (`measurement_value_Neutrophil-Band-Abs`+`measurement_value_Neutrophil-Seg-Abs`)/ `measurement_value_Lymphocytes-Abs`,
+         MLR = `measurement_value_Monocytes-Abs`/`measurement_value_Lymphocytes-Abs`,
+         PLR = measurement_value_Platelets/`measurement_value_Lymphocytes-Abs`,
+         NMR = (`measurement_value_Neutrophil-Band-Abs`+`measurement_value_Neutrophil-Seg-Abs`)/`measurement_value_Monocytes-Abs`
+         )
+
+write.csv(clean_dataset, file = paste0("../", result.dir, "/merged_dataset_ratios.csv"), 
+          row.names = F)
+```
+
+## Simple visualization
+
+This section creates violin plots to visualize the distribution of blood cell ratios:
+ 1. First transforms the data from wide to long format for plotting
+ 2. Creates age groups (Juvenile, Young Adults, Adults, Middle-Aged, Elderly)
+ 3. Generates separate plots for each age group using facet_wrap
+ 4. Uses log10 scale for better visualization of ratio distributions
+ 5. Colors plots by species for comparison
+ 6. Saves the final plot as a TIFF image in the figures directory
+
+```{r plot}
+
+clean_dataset %>%
+  pivot_longer(cols = c(NLR, MLR, PLR, NMR), values_to = "ratio_value", names_to = "ratio") %>%
+  mutate(age_group = factor(case_when(age <= 3 ~ "Juvenile",
+                               age > 3 & age <= 7 ~ "Young Adults",
+                               age > 7 & age <= 12 ~ "Adults",
+                               age > 12 & age <= 17 ~ "Middle-Aged",
+                               age > 17 ~ "Elderly"
+                               ), levels = c("Juvenile", "Young Adults", "Adults", "Middle-Aged", "Elderly") )) %>%
+  ggplot(aes(x = ratio, y = ratio_value, color = species_common_name)) +
+  geom_violin(trim = FALSE, scale = "area", draw_quantiles = TRUE) +
+  scale_y_log10() + 
+  labs( y = "Ratio values (log10)", x = "", color = "") +
+  facet_wrap(~age_group) +
+  theme_classic() +
+  theme(aspect.ratio = 1)
+
+ggsave(paste0(figure.dir,"/ratios_plot_per_spescies.tiff"), height = 5)
+```
+
+```{r}
+sessionInfo()
+```

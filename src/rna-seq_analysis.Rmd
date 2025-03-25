@@ -1,0 +1,665 @@
+---
+title: "NHP Reference Values project - RNA-seq analysis"
+author: "Rodrigo Arcoverde Cerveira"
+date: '`r format(Sys.Date(), "%Y-%m-%d")`'
+output: html_document
+knit: (function(inputFile, encoding) {
+          rmarkdown::render(inputFile,
+                            encoding = encoding, 
+                            output_file = paste0(
+                              xfun::sans_ext(inputFile), '_', Sys.Date(), '.html'),
+                                output_dir = "../results/lab_book/")})
+---
+
+```{r, global.options, include=FALSE}
+# Global knitr settings 
+# Set up figures and chunks messages
+
+knitr::opts_knit$set(
+  echo = TRUE,
+  root.dir = getwd(),
+  fig.width = 6, fig.height = 5,
+  fig.align = "center",
+  out.width = 768,
+  fig.pos = "H",
+  warning = FALSE,
+  message = FALSE
+)
+knitr::opts_chunk$set(
+  warning = FALSE,
+  message = FALSE,
+  fig.width = 6, fig.height = 5,
+  fig.align = "center",
+  out.width = 768,
+  fig.pos = "H"
+)
+
+data.dir <- "../data"
+result.dir <- paste("results/", Sys.Date(), sep = "/") 
+figures.dir <- paste0("../", result.dir, "/figures") 
+
+# Create result.dir with date in if not existent
+ifelse(isFALSE(dir.exists(paste0("../", result.dir))),
+  dir.create(paste0("../", result.dir), recursive = TRUE),
+  "Result directory for today exists already!"
+)
+
+ifelse(isFALSE(dir.exists(paste0(figures.dir))),
+  dir.create(paste0(figures.dir), recursive = TRUE),
+  "Result directory for today exists already!"
+)
+
+options(stringsAsFactors = FALSE)
+```
+
+# Load libraries
+
+```{r}
+#Load libraries
+#if you do not have libraries, they are located in either CRAN or Bioconductor
+library(clusterProfiler)
+library(psych)
+library(dplyr)
+library(ggplot2)
+library(ggsci)
+library(DESeq2)
+library(RColorBrewer)
+library(pheatmap)
+library(factoextra)
+library(ggpubr)
+library(GSVA)
+library(ReactomePA)
+library(enrichplot)
+
+nodeid.tbl_tree <- utils::getFromNamespace("nodeid.tbl_tree", "tidytree")
+rootnode.tbl_tree <- utils::getFromNamespace("rootnode.tbl_tree", "tidytree")
+offspring.tbl_tree <- utils::getFromNamespace("offspring.tbl_tree", "tidytree")
+offspring.tbl_tree_item <- utils::getFromNamespace(".offspring.tbl_tree_item", "tidytree")
+child.tbl_tree <- utils::getFromNamespace("child.tbl_tree", "tidytree")
+parent.tbl_tree <- utils::getFromNamespace("parent.tbl_tree", "tidytree")
+```
+
+# Load data
+
+```{r}
+# read fold change measurements
+
+fc_biochem <- read.csv("../data/fold_changes/fold_changes_bioch.csv") %>%  dplyr::select(where(~!all(is.na(.x))))
+
+selected_fc <- read.csv2("../data/fold_changes/Updated-24h_foldchange.csv", header = TRUE, sep = ";")
+colnames(selected_fc) <- gsub("Foldcha_", "", colnames(selected_fc))
+
+#reading data
+counts_raw_cd40 <- data.table::fread("../data/nf-core_rnaseq/CD40_project/star_salmon/salmon.merged.gene_counts.tsv", header = TRUE, sep = "\t") %>%  as.data.frame() %>%
+  select(-gene_id)
+ 
+counts_raw_novavax <- data.table::fread("../data/nf-core_rnaseq/novavax/star_salmon/salmon.merged.gene_counts.tsv", header = TRUE, sep = "\t") %>%  as.data.frame() %>%
+  select(-gene_id, gene_name)
+counts_raw <- cbind(counts_raw_cd40, counts_raw_novavax[,-1])
+
+# load normalized transcripts per million
+# rewrite the code below to load both the CD40 and novavax data TPM 
+tpm_cd40 <- data.table::fread("../data/nf-core_rnaseq/CD40_project/star_salmon/salmon.merged.gene_tpm.tsv", sep = "\t", header = TRUE) %>%  
+  as.data.frame() %>%
+  select(-gene_id)
+tpm_novavax <- data.table::fread("../data/nf-core_rnaseq/novavax/star_salmon/salmon.merged.gene_tpm.tsv", sep = "\t", header = TRUE) %>%  
+  as.data.frame() %>%
+  select(-gene_id, gene_name)
+tpm <- cbind(tpm_cd40, tpm_novavax[,-1])
+
+
+# load metadata
+metadata <- read.csv("../data/nf-core_rnaseq/merged_metadata.csv", header = TRUE, sep = ",") %>% 
+  filter(tissue == "Blood", comparator != "D79", batch == "novavax") %>%
+  mutate(sample_comparator = paste(ID, conditions, sep = "_"))
+
+
+## aggregate and sum up genes with same gene symbol, which were basically non-coding RNAs
+counts_raw <- aggregate(counts_raw[,-1], list(gene_name=counts_raw[,1]), FUN = sum)
+rownames(counts_raw) <- counts_raw$gene_name
+counts_raw <- dplyr::select(counts_raw, -c(gene_name))
+
+tpm <- aggregate(tpm[,-1], list(gene_name=tpm[,1]), FUN = sum)
+rownames(tpm) <- tpm$gene_name
+tpm <- dplyr::select(tpm, -c(gene_name))
+
+# filter only the samples that are in the metadata for both counts_raw and tpm
+counts_raw <- counts_raw[, pmatch(metadata$sample, colnames(counts_raw))]
+colnames(counts_raw) <- metadata$sample_comparator
+tpm <- tpm[, pmatch(metadata$sample, colnames(tpm))]
+colnames(tpm) <- metadata$sample_comparator
+```
+
+# Inspect data
+
+Matching metadata to counts_raw and plotting the raw counts histogram for first visual inspection.  
+
+```{r}
+#Synchonize count data with sample table
+.match_metadata <- function(gene_count_table, metadata_df){
+  gene_count_table <- gene_count_table[, pmatch(metadata_df$sample_comparator, colnames(gene_count_table))]
+  colnames(gene_count_table) <- metadata_df$sample_comparator
+  if(all(rownames(gene_count_table$sample_id) == colnames(gene_count_table))){
+    print("All data column names are matching with metadata IDs")
+  }else{print("Data column names do not match with metadata IDs")}
+}
+.match_metadata(counts_raw, metadata)
+.match_metadata(tpm, metadata)
+
+#Visualize distribution of raw counts w/ boxplot and density plot
+{
+  pdf(paste0(figures.dir,"/raw_counts_QC.pdf"), width = 10,  height = 8, compress = TRUE )
+  rafalib::mypar(1,2,mar=c(10,3,3,2))
+  boxplot(log2(as.matrix(counts_raw)+1),ylab=expression('Log'[2]~'Read counts'),las=2,main="Raw data")
+  hist(log2(as.matrix(counts_raw)+1),ylab="",las=2,main="Raw data")
+  par(mfrow=c(1,1))
+  dev.off()
+}
+```
+
+# Filtering data
+
+Plot detection of genes across samples. All samples are more or less close to average so we don't need to discard any samples.
+
+```{r}
+{
+  pdf(paste0(figures.dir,"/number_detected_genes.pdf"), width = 10,  height = 8, compress = TRUE )
+  par(mar=c(10,4,3,4))
+  barplot(colSums(counts_raw>3),ylab="Number of detected genes",las=2)
+  abline(h=median(colSums(counts_raw>3)))
+  dev.off()
+}
+
+#Filter low counts
+keep_genes <- rowSums( counts_raw > 3 ) >= 2
+counts_filtered<- counts_raw[keep_genes,]
+sum(keep_genes)
+```
+Removing reads with the log2 of the counts per million (cpm) lower than 1.
+
+
+# Plot gene of interest over time
+
+Use the transcripts per million calculated by salmon to plot it.
+
+```{r}
+tpm <- tpm %>% 
+  as.data.frame() %>%
+  tibble::rownames_to_column("gene_symbol")
+colnames(tpm) <- gsub("_XY", "", colnames(tpm))
+  
+# select genes based on their oficial gene symbol that related to following proteins/enzymes/molecules ALT, GGT, ALP, TBIL, ALB, BUN, CHOL,BA
+
+genes_of_interest <- c("GPT", "GGT1", "ALPL", "TBXAS1", "ALB", "ADAMTS13", "APOE", "BAAT" , "TNF", "IL6", "TGFB1", "IL1A", "IL1B", "CCL2", "IL10", "IFNG", "IL2","IL8", "IL18","NLRP3", "CASP7","CASP8","CASP4","CASP5", "P2RX7", "HMGB1", "PTGES2", "LDHA", "NFKB1", "NFKB2", "IL1RN")
+
+
+for(i in seq_along(genes_of_interest)){
+  name_gene <- genes_of_interest[i]
+  print(name_gene)
+ 
+  g1 <- tidyr::pivot_longer(tpm, !gene_symbol, values_to = "TPM") %>%
+    filter(gene_symbol == name_gene) %>%
+    tidyr::separate(name, into = c("ID","Comparator"), sep = "_") %>%
+    mutate(Comparator = ifelse(Comparator == "D0", "Baseline", "24 hours"),
+           Comparator = factor(Comparator, levels = c("Baseline", "24 hours")),
+           project = ifelse(grepl("R1", ID), "cd40", "novavax")) %>%
+    ggplot(aes(y = TPM, x = Comparator, group = ID, color = Comparator)) +
+    labs(title = name_gene, y = "Transcripts per million\n(log 10)", x = "")+
+    scale_y_log10(expand = expansion(mult = c(0.05, 0.15))) +
+    stat_compare_means(paired = TRUE, method = "wilcox.test", comparisons = list(c("Baseline", "24 hours"))) +
+    geom_boxplot(outlier.shape = NA, aes(group = Comparator)) +
+    geom_point()+
+    geom_line()+
+    ggprism::theme_prism(base_fontface = "plain", base_size = 10, border = TRUE) +
+    theme(aspect.ratio = 1, legend.position = "none") +
+    scale_color_aaas()
+  g1$theme[c("legend.text.align", "legend.title.align")] <- NULL
+  
+  ggsave(plot = g1, filename = paste0(figures.dir, "/", name_gene,".pdf"), width = 7, height = 7, units = "cm", dpi = 300)
+}
+```
+
+Plot detection rate across genes for raw and filtered counts
+
+```{r}
+{
+  pdf(paste0(figures.dir,"/detection_rate_raw_filtered.pdf"), width = 10,  height = 8, compress = TRUE )
+  par(mar=c(10,4,3,4))
+  hist(rowSums(counts_raw>2))
+  hist(rowSums(counts_filtered>2))
+  par(mfrow=c(1,1))
+  dev.off()
+}
+```
+Plot distribution of the filtered counts
+
+```{r}
+{
+  pdf(paste0(figures.dir,"/filtered_counts_distribution.pdf"), width = 10,  height = 8, compress = TRUE )
+  rafalib::mypar(1,2,mar=c(10,3,3,2))
+  boxplot(log2(as.matrix(counts_filtered)+1),ylab=expression('Log'[2]~'Read counts'),las=2,main="Filtered data")
+  hist(log2(as.matrix(counts_filtered)+1),ylab="",las=2,main="Filtered data")
+  par(mfrow=c(1,1))
+  dev.off()
+}
+```
+#### DESeq object creation and data QC
+
+Generating the DESeq dataset by rounding the values of the counts_raw, since the data is based on RNA-Seq by Expectation-Maximization (RSEM) algorithm. 
+
+```{r}
+# prepare for DESeq
+metadata$conditions <- factor(metadata$conditions)
+metadata$sex <- factor(metadata$sex)
+metadata$batch <- factor(metadata$batch)
+
+# create DESeq object
+dds <- DESeqDataSetFromMatrix(countData = round(counts_filtered),
+                              colData = metadata,
+                              design =  ~ sex + conditions)
+
+# Normalize with variance stabilizing transformation for later PCA and heatmap
+counts_vst_normalized <- vst(dds, blind = TRUE)
+
+```
+
+Plot distribution of data after normalization
+
+```{r}
+# haven't decided which plots to use
+vst_matrix <- assay(counts_vst_normalized) 
+#rlog_matrix <- assay(counts_rlog_normalized)
+hist(vst_matrix)
+#hist(rlog_matrix)
+boxplot(vst_matrix ,ylab=expression('Log'[2]~'Read counts'),las=2,main="VST")
+#boxplot(rlog_matrix ,ylab=expression('Log'[2]~'Read counts'),las=2,main="rlog")
+
+```
+#### Heatmap
+
+```{r}
+# Sample heatmap
+sampleDist <- cor(vst_matrix, method = "spearman") 
+
+Metadata <- data.frame(metadata$batch, metadata$comparator)
+names(Metadata) <- c("Study","Dose")
+rownames(Metadata) <- metadata$sample_comparator
+
+# Plot heatmap
+colors<-colorRampPalette(rev(brewer.pal(n=7,name="RdBu")))(255)
+
+{
+  pdf(paste0(figures.dir,"/heatmap.pdf"), width = 10,  height = 8, compress = TRUE )
+ Heatmap <-  pheatmap(sampleDist, 
+           color = colors,
+           clustering_distance_rows = as.dist(1 - sampleDist),
+           clustering_distance_cols = as.dist(1 - sampleDist), 
+           show_rownames = F,
+           show_colnames = F,
+           clustering_method = "ward.D2",
+           annotation_col = Metadata)
+  par(mfrow=c(1,1))
+  dev.off()
+}
+
+```
+
+# Principal Component Analyais (PCA)
+
+Dimensionality reduction for evaluating outliers and global sample clusters for both quality control but also for primary exploratory analysis.
+
+```{r}
+#Sample PCA
+pca <- t(assay(counts_vst_normalized)) 
+order_names <- rownames(pca) 
+pca <- FactoMineR::PCA(pca, graph = FALSE)
+metadata <- metadata[match(order_names, metadata$sample_comparator),]
+
+fviz_pca_ind(pca,axes.linetype = "dotted",
+             pointsize = 5,
+             habillage = as.factor(metadata$batch),
+             palette = "npg",
+             label = metadata$ID,
+             invisible="quali") +
+  labs(title = "") +
+  theme_minimal()+
+  theme(axis.title = element_text(size = 20, face = "bold"),
+        axis.text = element_text(size = 16, face = "bold", color = "black"),
+        panel.grid = element_line("white"),
+        axis.ticks = element_line(size = 1),
+        axis.line = element_line(color = "black", size = 1)) 
+
+
+## Plot how much each dimension explains
+fviz_eig(pca, addlabels = TRUE)
+
+fviz_cos2(pca, choice = "ind", axes = 1:2)
+
+## Explore which variables contribute the most for each PC
+fviz_contrib(pca, choice = "var", axes = 1, top = 100)
+
+```
+
+# Statistical analysis and fitting DESeq2 model
+
+```{r}
+# Run the DESeq2 analysis
+dds <-  DESeq(dds)
+
+# check contrast names
+resultsNames(dds)
+
+# Results dds1
+
+res_blood <- as.data.frame(results(dds, contrast = c("conditions", "D1_PAXgene", "D0_PAXgene")))
+# save csv in results.dir folder with ordered res_blood based on p.adj values
+res_blood_sign <- res_blood %>% filter(padj < 0.05)
+write.csv(res_blood_sign[order(res_blood_sign$padj),], file = paste0("../",result.dir,"/res_blood_DEGs.csv"), row.names = TRUE)
+
+```
+
+
+#### Visualization plot of DEG
+
+Volcano plot for data exploranotory analysis, filtering for significant values with False Discovery Rate < 0.05 and log fold change greater than 1.
+
+#### Volcano plots
+Volcano plot for data exploratory analysis, filtering for significant values with False Discovery Rate \< 0.05 and log fold change greater than 1.
+
+```{r}
+# check only the negative fold change to see if there's a different pahtway of negative fold changes
+
+results_list <- list(res_blood)
+
+names(results_list) <- c("blood") 
+
+results_list_plot <- lapply(results_list, function(x) {
+  x <- x %>% mutate(
+    test_padj = case_when(
+      padj < 0.05 & log2FoldChange >= 1 ~ "Up regulated",
+      padj < 0.05 & log2FoldChange <= -1 ~ "Down regulated",
+      TRUE ~ "Not significant"
+    ),
+    test_pvalue = case_when(
+      pvalue < 0.05 & log2FoldChange >= 1 ~ "Up regulated",
+      pvalue < 0.05 & log2FoldChange <= -1 ~ "Down regulated",
+      TRUE ~ "Not significant"
+    ),
+  )
+})
+
+# function to make volcano plots
+volcano_plot <- function(x) {
+  subsetted <- subset(
+    results_list_plot[[x]] %>%
+      tibble::rownames_to_column("gene_symbol"),
+    abs(log2FoldChange) >= 1 & padj < 0.05
+  )
+  # count up regulated DEGs
+  deg_number_up <- subset(
+    results_list_plot[[x]] %>%
+      tibble::rownames_to_column("gene_symbol"),
+    log2FoldChange >= 1 & padj < 0.05
+  ) %>%
+    nrow()
+  # count down regulated DEGs
+  deg_number_down <- subset(
+    results_list_plot[[x]] %>%
+      tibble::rownames_to_column("gene_symbol"),
+    log2FoldChange <= -1 & padj < 0.05
+  ) %>%
+    nrow()
+   #results_list_plot[[x]]$genelabels <- ""
+   #results_list_plot[[x]]$genelabels <- ifelse(grepl("ISG|CXCL|CD|IL12", results_list_plot[[x]]$gene_symbol), TRUE, FALSE)
+   
+  results_list_plot[[x]] %>%
+    ggplot(aes(x = log2FoldChange, y = -log10(padj))) +
+    geom_point(aes(colour = test_padj), size = 3, alpha = 0.3) +
+    scale_color_manual(values = c(
+      "Down regulated" = "#0000a6",
+      "Not significant" = "grey80",
+      "Up regulated" = "#a60000"
+    )) +
+    xlab(expression("Fold Change (Log"[2] * ")")) +
+    ylab(expression("-Log"[10] * "(p-value)")) +
+    labs(x = NULL, y = NULL) +
+    geom_vline(xintercept = c(-1), linetype = "dotted", size = 1) +
+    geom_vline(xintercept = c(1), linetype = "dotted", size = 1) +
+    geom_hline(yintercept = -log10(0.05), linetype = "dotted", size = 1) +
+    # geom_label_repel(data = subsetted, 
+    # aes(log2FoldChange,-log10(pvalue),label= gene_symbol),
+    # max.overlaps = 10) +
+    xlim(-5, 5) +
+    ylim(0, 10) +
+    ggtitle(x) +
+    annotate(
+      geom = "text", colour = "#a60000", size = 10, x = 3.5, y = 10, hjust = 0,
+      label = paste0(deg_number_up)
+    ) +
+    annotate(
+      geom = "text", colour = "#0000a6", size = 10, x = -3.5, y = 10, hjust = 0,
+      label = paste0(deg_number_down)
+    ) +
+    theme_pubr() +
+    theme(legend.position = "none",
+          aspect.ratio = 1)
+}
+
+volcano_plots <- lapply(names(results_list_plot), volcano_plot)
+names(volcano_plots) <- names(results_list_plot)
+volcano_plots
+
+lapply(names(volcano_plots), function(x) ggsave(filename = paste0(figures.dir,"/", x,"_volcano_plot.pdf"), width = 7, height = 7,
+                                         plot = volcano_plots[[x]]))
+
+```
+
+### Enrichment analysis
+
+Selecting two different databases for search for enrichment analysis. The databases selected were "Reactome Pathway Database". 
+
+### Gene Set Enrichment Analysis with ClusterProfiler
+
+#### Annotaions
+
+```{r, message=F, warning=F}
+# SET THE DESIRED ORGANISM HERE
+organism <- "org.Mmu.eg.db"
+# BiocManager::install(organism, character.only = TRUE)
+library(organism, character.only = TRUE)
+```
+
+#### Prepare Input
+
+```{r}
+process_to_gsea <- function(x){
+  original_gene_list <- x$log2FoldChange
+  names(original_gene_list) <- rownames(x)
+  gene_list<-na.omit(original_gene_list)
+  gene_list <- sort(gene_list, decreasing = TRUE)
+}
+
+ls_processed <- lapply(results_list, process_to_gsea)
+
+```
+
+#### Gene Set Enrichment
+
+```{r}
+reactome_db <- msigdbr::msigdbr(species = "Macaca mulatta", category = "C2", subcategory = "CP:REACTOME") 
+
+list_gse <- lapply(ls_processed, function(x) GSEA(geneList=x, 
+            TERM2GENE = reactome_db[c("gs_description", "gene_symbol")]
+            ))
+
+list_gse <- lapply(list_gse, enrichplot::pairwise_termsim)
+
+treeplot(list_gse[[1]], color = "NES", nwords = 0) +
+  theme(legend.position="bottom") +
+  scale_color_gradient2(low = "#0000a6", high = "#a60000", mid = "white")
+
+ggsave(filename = paste0(figures.dir,"/gsea_reactome_tree.pdf"))
+
+```
+
+```{r}
+gseaplot2(list_gse[[1]], geneSetID = grep("Interferon Signaling", list_gse[[1]]$Description), pvalue_table = TRUE, color = "#a60000")
+
+ggsave(filename = paste0(figures.dir,"/gsea_interferon.pdf"), width = 5.7, height = 4)
+
+gseaplot2(list_gse[[1]], geneSetID = grep("Interleukin-1 signaling", list_gse[[1]]$Description), pvalue_table = TRUE, color = "#a60000")
+
+ggsave(filename = paste0(figures.dir,"/gsea_interleukin1.pdf"), width = 5.7, height = 4)
+```
+
+
+### Gene Set Variation Analysis
+
+```{r}
+vst_matrix <- assay(dds) %>%
+  as.matrix()
+
+reactome_db_interferon <- reactome_db %>% filter(gs_description %in% c("Interferon Signaling","Interleukin-1 signaling" ))
+
+
+reactome_list <- split(
+  reactome_db_interferon$gene_symbol, # The genes we want split into pathways
+  reactome_db_interferon$gs_description # The pathways made as the higher levels of the list
+)
+
+```
+
+
+
+```{r}
+library(corto)
+
+ssgsea_reactome <- corto::ssgsea(inmat = vst_matrix, groups = reactome_list, scale = TRUE)
+
+colnames(ssgsea_reactome) <- colnames(vst_matrix)
+ssgsea_reactome_df <- as.data.frame(ssgsea_reactome) %>%
+  tibble::rownames_to_column("gs_description") %>%
+  # merge all column values to to long format and keep values in column names NES
+  tidyr::pivot_longer(c(everything(), -gs_description), names_to = "Sample", values_to = "NES") %>%
+  tidyr::separate(Sample, c("Animal.ID", "timepoint"), sep = "_") %>% 
+  filter(timepoint == "D1") %>%
+  merge(fc_biochem, by = "Animal.ID")
+
+for(i in colnames(fc_biochem[-1])){
+ssgsea_reactome_df %>%
+  ggplot(aes(x = NES, y = get(i))) +
+  geom_point() +
+    geom_smooth(method = "lm", se = TRUE) +
+    stat_cor(method = "pearson", cor.coef.name = "r", p.accuracy = 0.001, label.x.npc = .3) +
+    labs(y = i, x = "Normalized Enrichment Score (ssGSEA)") +
+    cowplot::theme_cowplot() +
+  facet_wrap(~gs_description, scales = "free_x")
+
+ggsave(filename = paste0(figures.dir,"/", i,"_correlation.pdf"), width = 7, height = 5)
+}
+```
+
+# Compare the gene fold changes with biochmestry fold changes
+
+```{r}
+# calculate the fold changes per sample from the dds object
+norm_counts_full <- counts(dds, normalized=TRUE)
+# filter for DEGs only
+res_blood_sign <- res_blood[!is.na(res_blood$padj) & res_blood$padj < 0.05,]
+# filter the counts for the DEGs
+norm_counts <- norm_counts_full[rownames(res_blood_sign),]
+
+# calculate the fold change per sample in for all the samples in norm_counts based on the column names where the first characters before "_" are the sample name
+sample_names <- gsub("_.*","", colnames(norm_counts))
+sample_names <- unique(sample_names)
+
+# calculate the ratio from D1 to D0 for all samples
+ratio_nc <- data.frame()
+for (i in sample_names){
+  print(i)
+  # edit the code below to save in a data.frame the ratio that is calculate for all the genes for each
+  ratio_nc <- rbind(ratio_nc, tibble(sample = i, ratio = norm_counts_full[,paste0(i,"_D1_PAXgene")]/norm_counts_full[,paste0(i,"_D0_PAXgene")], gene_symbol = rownames(norm_counts_full)))
+}
+  
+#pivot wider to have the ratio per sample
+ratio_nc_wider <- ratio_nc %>% 
+  tidyr::pivot_wider(names_from = gene_symbol, values_from = ratio )
+
+# order rows of ratio_nc_wider$samples based on order of fc_biochem$Animal.ID
+ratio_nc_wider <- ratio_nc_wider[match(fc_biochem$Animal.ID, ratio_nc_wider$sample),]
+
+
+for(i in c("TNF")){
+  data_test <- tibble(ratio_nc_wider[i], fc_biochem["Foldcha_ALT"])
+  
+  data_test %>%
+    ggplot(aes(x = get(i), y = Foldcha_ALT)) +
+    geom_point() +
+    geom_smooth(method = "lm", se = TRUE) +
+    stat_cor(method = "spearman", cor.coef.name = "r", p.accuracy = 0.001) +
+    theme(aspect.ratio = 1) +
+    labs(x = paste0(i, "_FC")) +
+    theme_bw() 
+  
+  # save
+  ggsave(filename = paste0(figures.dir, "/", i, "_correlation_plot.pdf"), width = 3, height = 3)
+}
+```
+```{r}
+# create a pca using factomine for the gene fold changes in selected_fc and plot
+pca_fc <- FactoMineR::PCA(selected_fc[,-1], graph = FALSE)
+
+# plot both vector and ind
+fviz_pca_biplot(pca_fc, axes = c(1, 2), 
+                col.var="contrib",
+                pointsize = 2,
+                geom = c("point"), gradient.cols = c("grey50", "darkred"),
+                repel = TRUE)
+# save plot
+ggsave(filename = paste0(figures.dir,"/pca_fc.pdf"), width = 5, height = 3)
+```
+
+## Correlation heatmap
+
+```{r}
+
+# correlation of genes without Folcha_IMN using corrplot
+corr_res <- corr.test(selected_fc[,-c(1,4)],
+          ci = TRUE, method = "spearman")
+
+corr_res$p.adj <- matrix(p.adjust(corr_res$p, method = "fdr"),nrow = 8,ncol = 8)
+rownames(corr_res$p.adj) <- rownames(corr_res$p)
+colnames(corr_res$p.adj) <- colnames(corr_res$p)
+
+# change values to remove diagonal comparisons
+# change 0.000000 to 1 (value correlated to itself)
+corr_res$p.adj[corr_res$p.adj == 0] <- 1
+corr_res$p[corr_res$p == 0] <- 1
+
+# plor corr_res$r and show significant with *
+{
+  pdf(paste0(figures.dir, "/correlation_plot.pdf"), width = 5, height = 5)
+  corrplot::corrplot(corr_res$r, type = "lower", 
+                     p.mat = corr_res$p.adj, sig.level = c(.001, .01, .05),
+                     insig = "label_sig", pch.cex=0.9, pch.col = "white",
+                     order = "hclust", tl.col = "black", tl.srt = 45)
+  dev.off()
+}
+
+# not adjusted
+{
+  pdf(paste0(figures.dir, "/correlation_plot_nopadj.pdf"), width = 5, height = 5)
+  corrplot::corrplot(corr_res$r, type = "lower", 
+                     p.mat = corr_res$p, sig.level = c(.001, .01, .05),
+                     insig = "label_sig", pch.cex=0.9, pch.col = "white",
+                     order = "hclust", tl.col = "black", tl.srt = 45)
+  dev.off()
+}
+
+```
+
+## Session info
+
+```{r}
+sessionInfo()
+```
