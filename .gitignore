@@ -1,14 +1,21 @@
+# Ignore common R and project files
 .Rproj.user
 .Rhistory
 .RData
 .Ruserdata
-data/
+
+# Ignore entire directories but allow specific subdirectories
+data/*
+!data/Cynos/
+!data/fold_changes/
+!data/gene_modules/
+!data/Indian_Rhesus/
+!data/nf-core_rnaseq/
+
 doc/
-results/
-!results/lab_book
-!data/Cynos
-!data/fold_changes
-!data/gene_modules
-!data/Indian_Rhesus
-!data/nf-core_rnaseq
+
+results/*
+!results/lab_book/
+
 renv/
+
